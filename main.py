@@ -6,6 +6,9 @@ import board
 import busio
 import digitalio
 
+from light import Light
+from preset import Preset
+
 LIGHT_MAC_ADDRESS = '907065277A3D'
 
 COMMAND_PREFIX = 0xF0
@@ -13,7 +16,7 @@ COMMAND_GET_STATUS = 0x10
 COMMAND_SET_LIGHT = 0x20
 COMMAND_SET_ALL = 0x21
 COMMAND_RUN_PRESET = 0x30
-COMMAND_SET_PRESET = 0x31 
+COMMAND_SET_PRESET = 0x31
 
 STATE_DISCONNECTED = 0
 STATE_CONNECTED = 1
@@ -28,9 +31,19 @@ statusLed = digitalio.DigitalInOut(board.D13)
 statusLed.direction = digitalio.Direction.OUTPUT
 statusLed.value = False
 
-statusPin = digitalio.DigitalInOut(board.D7)
-statusPin.direction = digitalio.Direction.INPUT
-statusPin.pull = digitalio.Pull.DOWN
+statusIo = digitalio.DigitalInOut(board.D7)
+statusIo.direction = digitalio.Direction.INPUT
+statusIo.pull = digitalio.Pull.DOWN
+
+light1 = Light(huePin=board.A5, brightnessPin=board.A4)
+LIGHTS = [
+    light1,
+    light1,
+]
+
+PRESETS = [
+    Preset(showPin=board.D11, setPin=board.D10)
+]
 
 def bufToString(data):
     if data is None:
@@ -38,21 +51,7 @@ def bufToString(data):
     else:
         return ''.join([chr(b) for b in data])
 
-def wheel(pos):
-    # Input a value 0 to 255 to get a color value.
-    # The colours are a transition r - g - b - back to r.
-    if (pos < 0) or (pos > 255):
-        return (0, 0, 0)
-    if pos < 85:
-        return (int(pos * 3), int(255 - (pos * 3)), 0)
-    elif pos < 170:
-        pos -= 85
-        return (int(255 - pos * 3), 0, int(pos * 3))
-    else:
-        pos -= 170
-        return (0, int(pos * 3), int(255 - pos * 3))
-
-def sendAtCommand(cmd = False):
+def sendAtCommand(cmd=False):
     gotResponse = False
     lastCommandTime = 0
 
@@ -82,14 +81,15 @@ def sendAtCommand(cmd = False):
             else:
                 gotResponse = True
 
-def sendLightCommand(cmd, params, extraParams):
-    cmd = [COMMAND_PREFIX, cmd] 
+
+def sendLightCommand(cmd, params, extraParams = []):
+    cmd = [COMMAND_PREFIX, cmd]
     cmd.extend(params)
     cmd.extend(extraParams)
 
     # Pad out to 20 bytes because that's the BTLE limit
     cmd += [0] * (20 - len(cmd))
-    
+
     btle.write(bytes(cmd))
 
     lastCommandTime = time.time()
@@ -99,8 +99,9 @@ def sendLightCommand(cmd, params, extraParams):
 
         if data is not None:
             return True
-        elif time.time() > lastCommandTime + 2 or not statusPin.value:
+        elif time.time() > lastCommandTime + 2 or not statusIo.value:
             return False
+
 
 def initBtle():
     print("Waiting for module ready")
@@ -115,20 +116,34 @@ def initBtle():
     sendAtCommand('ROLE1')
     print()
 
+
 def connectBtle():
     sendAtCommand('CONA' + LIGHT_MAC_ADDRESS)
+
+def scanControls():
+    for i, l in enumerate(LIGHTS):
+        changed = l.read()
+        if changed:
+            sendLightCommand(COMMAND_SET_LIGHT, [i], l.rgb)
+
+    for i, p in enumerate(PRESETS):
+        action = p.read()
+        if action is 1:
+            sendLightCommand(COMMAND_RUN_PRESET, [i])
+        elif action is 2:
+            sendLightCommand(COMMAND_SET_PRESET, [i])
 
 def main():
     print("Controller started")
 
-    if statusPin.value:
+    if statusIo.value:
         print("Bluetooth already connected")
         state = STATE_CONNECTED
     else:
         state = STATE_UNINITIALIZED
 
     while True:
-        if statusPin.value:
+        if statusIo.value:
             if state is not STATE_CONNECTED and state is not STATE_WAITING_CONNECTION:
                 print("State change: CONNECTED")
                 state = STATE_CONNECTED
@@ -142,9 +157,7 @@ def main():
         statusLed.value = state is STATE_CONNECTED
 
         if state is STATE_CONNECTED:
-            pos = int(time.monotonic() * 20)
-            sendLightCommand(COMMAND_SET_LIGHT, [0], wheel(pos & 255))
-            sendLightCommand(COMMAND_SET_LIGHT, [1], wheel((pos + 127) & 255))
+            scanControls()
 
         elif state is STATE_DISCONNECTED:
             print("Starting connection")
@@ -153,7 +166,7 @@ def main():
 
         elif state is STATE_WAITING_CONNECTION:
             dataStr = bufToString(btle.read(20))
-            print(dataStr, end = '')
+            print(dataStr, end='')
 
             if dataStr.startswith('+Connected'):
                 state = STATE_DISCONNECTED
@@ -165,5 +178,6 @@ def main():
             print("Initializing Bluetooth module:")
             initBtle()
             state = STATE_DISCONNECTED
+
 
 main()
