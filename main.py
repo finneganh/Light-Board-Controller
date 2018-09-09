@@ -5,9 +5,12 @@ import time
 import board
 import busio
 import digitalio
+import adafruit_mcp230xx
+import rotaryio
 
 from light import Light
 from preset import Preset
+from mcp_rotary_encoder import McpRotaryEncoder
 
 LIGHT_MAC_ADDRESS = '907065277A3D'
 
@@ -22,6 +25,9 @@ STATE_DISCONNECTED = 0
 STATE_CONNECTED = 1
 STATE_UNINITIALIZED = 2
 STATE_WAITING_CONNECTION = 3
+
+i2c = busio.I2C(board.SCL, board.SDA)
+mcp = adafruit_mcp230xx.MCP23017(i2c)
 
 # Default baud rate for the board is 9600. We keep a low-ish timeout so we can determine
 # there’s no content in 50ms.
@@ -179,5 +185,18 @@ def main():
             initBtle()
             state = STATE_DISCONNECTED
 
+def main2():
+    pinA = mcp.get_pin(8)
+    pinB = mcp.get_pin(9)
 
-main()
+    last_position = None
+    encoder = McpRotaryEncoder(pinA, pinB)
+
+    while True:
+        encoder.update()
+        position = encoder.position
+        if last_position is None or position != last_position:
+            print(position)
+        last_position = position
+
+main2()
