@@ -186,15 +186,25 @@ def main():
             state = STATE_DISCONNECTED
 
 def main2():
-    pinA = mcp.get_pin(8)
-    pinB = mcp.get_pin(9)
+    encoders = []
+
+    mcp.iodir = 0xFFFF
+    mcp.gppu = 0xFFFF
+
+    for i in range(8):
+        encoders.append(McpRotaryEncoder(a = i * 2, b = i * 2 + 1))
 
     last_position = None
-    encoder = McpRotaryEncoder(pinA, pinB)
+    encoder = encoders[4]
 
     while True:
-        encoder.update()
+        gpio = mcp.gpio
+
+        for e in encoders:
+            e.update(gpio)
+
         position = encoder.position
+
         if last_position is None or position != last_position:
             print(position)
         last_position = position

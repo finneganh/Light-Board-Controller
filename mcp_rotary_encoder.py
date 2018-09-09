@@ -1,24 +1,15 @@
-import digitalio
-
 class McpRotaryEncoder:
-  def __init__(self, pinA, pinB):
-    pinA.direction = digitalio.Direction.INPUT
-    pinA.pull = digitalio.Pull.UP
-
-    pinB.direction = digitalio.Direction.INPUT
-    pinB.pull = digitalio.Pull.UP
-
-    self.pinA = pinA
-    self.pinB = pinB
+  def __init__(self, a, b):
+    self.pinAMask = 1 << a
+    self.pinBMask = 1 << b
 
     self.position = 0
-    self.lastA = pinA.value
-    self.lastB = pinB.value
-    print("init at ", self.lastA, self.lastB)
+    self.lastA = None
+    self.lastB = None
 
-  def update(self): 
-    newA = self.pinA.value
-    newB = self.pinB.value
+  def update(self, gpio): 
+    newA = (gpio & self.pinAMask) != 0
+    newB = (gpio & self.pinBMask) != 0
 
     delta = 0
 
