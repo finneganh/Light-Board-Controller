@@ -5,9 +5,11 @@ import time
 import board
 import busio
 import digitalio
+import neopixel
 
 from light import Light
-from preset import Preset
+from button import Button
+from mcp3008 import Mcp3008
 
 LIGHT_MAC_ADDRESS = '907065277A3D'
 
@@ -23,35 +25,69 @@ STATE_CONNECTED = 1
 STATE_UNINITIALIZED = 2
 STATE_WAITING_CONNECTION = 3
 
+num_buttons = 5
+button_pixels = neopixel.NeoPixel(
+    board.D5, num_buttons, pixel_order=neopixel.RGB, brightness=0.2, auto_write=False)
+
 # Default baud rate for the board is 9600. We keep a low-ish timeout so we can determine
 # there’s no content in 50ms.
 btle = busio.UART(board.TX, board.RX, baudrate=9600, timeout=50)
 
-statusLed = digitalio.DigitalInOut(board.D13)
-statusLed.direction = digitalio.Direction.OUTPUT
-statusLed.value = False
+btle_status_io = digitalio.DigitalInOut(board.D7)
+btle_status_io.direction = digitalio.Direction.INPUT
+btle_status_io.pull = digitalio.Pull.DOWN
 
-statusIo = digitalio.DigitalInOut(board.D7)
-statusIo.direction = digitalio.Direction.INPUT
-statusIo.pull = digitalio.Pull.DOWN
+spi = busio.SPI(board.SCK, MISO=board.MISO, MOSI=board.MOSI)
+spi.try_lock()
+spi.configure(baudrate=1200000, phase=0, polarity=0)
 
-light1 = Light(huePin=board.A5, brightnessPin=board.A4)
+mcp3008 = Mcp3008(spi, cs_pin=board.D2)
+
+light1 = Light(mcp3008, hue_pin=0, brightness_pin=1)
 LIGHTS = [
     light1,
-    light1,
 ]
 
-PRESETS = [
-    Preset(showPin=board.D11, setPin=board.D10)
+PRESET_BUTTONS = [
+    Button(board.D9, light=2),
+    Button(board.D10, light=1),
+    Button(board.D11, light=0),
+    Button(board.D12, light=3),
+    Button(board.D13, light=4),
 ]
 
-def bufToString(data):
+button_states = [
+    0,
+    0,
+    0,
+    0,
+    0,
+]
+
+RED = (255, 0, 0)
+YELLOW = (255, 150, 0)
+GREEN = (0, 255, 0)
+CYAN = (0, 255, 255)
+BLUE = (0, 0, 255)
+PURPLE = (180, 0, 255)
+
+COLORS = [
+    RED,
+    YELLOW,
+    GREEN,
+    CYAN,
+    BLUE,
+    PURPLE
+]
+
+def buf_to_string(data):
     if data is None:
         return ''
     else:
         return ''.join([chr(b) for b in data])
 
-def sendAtCommand(cmd=False):
+
+def send_at_command(cmd=False):
     gotResponse = False
     lastCommandTime = 0
 
@@ -73,7 +109,7 @@ def sendAtCommand(cmd=False):
             if gotResponse:
                 return
         else:
-            response = bufToString(data)
+            response = buf_to_string(data)
             print(response, end='')
 
             if response.startswith('ERR'):
@@ -82,7 +118,7 @@ def sendAtCommand(cmd=False):
                 gotResponse = True
 
 
-def sendLightCommand(cmd, params, extraParams = []):
+def send_light_command(cmd, params, extraParams=[]):
     cmd = [COMMAND_PREFIX, cmd]
     cmd.extend(params)
     cmd.extend(extraParams)
@@ -99,51 +135,58 @@ def sendLightCommand(cmd, params, extraParams = []):
 
         if data is not None:
             return True
-        elif time.time() > lastCommandTime + 2 or not statusIo.value:
+        elif time.time() > lastCommandTime + 2 or not btle_status_io.value:
             return False
 
 
 def initBtle():
     print("Waiting for module ready")
-    sendAtCommand()
+    send_at_command()
     print()
 
     print("Getting firmware version")
-    sendAtCommand('VERSION')
+    send_at_command('VERSION')
     print()
 
     print("Setting central mode")
-    sendAtCommand('ROLE1')
+    send_at_command('ROLE1')
     print()
 
 
-def connectBtle():
-    sendAtCommand('CONA' + LIGHT_MAC_ADDRESS)
+def connect_btle():
+    send_at_command('CONA' + LIGHT_MAC_ADDRESS)
 
-def scanControls():
-    for i, l in enumerate(LIGHTS):
-        changed = l.read()
-        if changed:
-            sendLightCommand(COMMAND_SET_LIGHT, [i], l.rgb)
 
-    for i, p in enumerate(PRESETS):
-        action = p.read()
-        if action is 1:
-            sendLightCommand(COMMAND_RUN_PRESET, [i])
-        elif action is 2:
-            sendLightCommand(COMMAND_SET_PRESET, [i])
+def run_connected():
+    btn_changed = False
+    for idx in range(num_buttons):
+        btn = PRESET_BUTTONS[idx]
+        if btn.read():
+            button_states[idx] = (button_states[idx] + 1) % len(COLORS)
+            btn_changed = True
+
+        button_pixels[btn.light] = COLORS[button_states[idx]]
+
+    if btn_changed:
+        button_pixels.write()
+
+    for light in LIGHTS:
+        if light.read():
+            button_pixels.fill(light.rgb)
+            button_pixels.write()
+            send_light_command(COMMAND_SET_LIGHT, [1], light.rgb)
 
 def main():
     print("Controller started")
 
-    if statusIo.value:
+    if btle_status_io.value:
         print("Bluetooth already connected")
         state = STATE_CONNECTED
     else:
         state = STATE_UNINITIALIZED
 
     while True:
-        if statusIo.value:
+        if btle_status_io.value:
             if state is not STATE_CONNECTED and state is not STATE_WAITING_CONNECTION:
                 print("State change: CONNECTED")
                 state = STATE_CONNECTED
@@ -154,18 +197,16 @@ def main():
                 state = STATE_DISCONNECTED
                 print()
 
-        statusLed.value = state is STATE_CONNECTED
-
         if state is STATE_CONNECTED:
-            scanControls()
+            run_connected()
 
         elif state is STATE_DISCONNECTED:
             print("Starting connection")
-            connectBtle()
+            connect_btle()
             state = STATE_WAITING_CONNECTION
 
         elif state is STATE_WAITING_CONNECTION:
-            dataStr = bufToString(btle.read(20))
+            dataStr = buf_to_string(btle.read(20))
             print(dataStr, end='')
 
             if dataStr.startswith('+Connected'):
@@ -178,6 +219,7 @@ def main():
             print("Initializing Bluetooth module:")
             initBtle()
             state = STATE_DISCONNECTED
+
 
 
 main()

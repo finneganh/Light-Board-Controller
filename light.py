@@ -1,19 +1,3 @@
-import analogio
-
-def wheel(pos):
-    # Input a value 0 to 255 to get a color value.
-    # The colours are a transition r - g - b - back to r.
-    if (pos < 0) or (pos > 255):
-        return (0, 0, 0)
-    if pos < 85:
-        return (int(pos * 3), int(255 - (pos * 3)), 0)
-    elif pos < 170:
-        pos -= 85
-        return (int(255 - pos * 3), 0, int(pos * 3))
-    else:
-        pos -= 170
-        return (0, int(pos * 3), int(255 - pos * 3))
-
 # Derived from: http://www.easyrgb.com/en/math.php#text2
 #
 # Input range: 0–1
@@ -60,13 +44,15 @@ def hue2rgb(v1, v2, vh):
 class Light:
   rgb = (0, 0, 0)
 
-  def __init__(self, huePin, brightnessPin):
-    self.hueIo = analogio.AnalogIn(huePin)
-    self.brightnessIo = analogio.AnalogIn(brightnessPin)
+  def __init__(self, mcp3008, hue_pin, brightness_pin):
+    self.mcp3008 = mcp3008
+    self.hue_pin = hue_pin
+    self.brightness_pin = brightness_pin
 
   def read(self):
-    hue = int(self.hueIo.value / 655.360) / 100
-    brightness = int(self.brightnessIo.value / 655.360) / 100
+    hue = (self.mcp3008.read(self.hue_pin) >> 2) / 255
+    brightness = 0.5
+    # brightness = (self.mcp3008.read(self.brightness_pin) >> 2) / 255
 
     newRgb = hsl2rgb(hue, 1.0, brightness)
     if newRgb != self.rgb:
