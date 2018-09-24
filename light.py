@@ -40,9 +40,10 @@ def hue2rgb(v1, v2, vh):
 
   return v1
 
-
 class Light:
   rgb = (0, 0, 0)
+  hue = 0
+  brightness = 127
 
   def __init__(self, mcp3008, hue_pin, brightness_pin):
     self.mcp3008 = mcp3008
@@ -50,14 +51,18 @@ class Light:
     self.brightness_pin = brightness_pin
 
   def read(self):
-    hue = (self.mcp3008.read(self.hue_pin) >> 2) / 255
-    brightness = 0.5
-    # brightness = (self.mcp3008.read(self.brightness_pin) >> 2) / 255
+    # We shift these down to one byte, but then zero out the LSB to reduce
+    # noise from the ADC.
+    new_hue = self.mcp3008.read(self.hue_pin) >> 2 & 0b11111110
+    new_brightness = self.mcp3008.read(self.brightness_pin) >> 2 & 0b11111110
+    new_brightness = 127
 
-    newRgb = hsl2rgb(hue, 1.0, brightness)
-    if newRgb != self.rgb:
-      self.rgb = newRgb
+    if new_hue != self.hue or new_brightness != self.brightness:
+      self.hue = new_hue
+      self.brightness = new_brightness
+      self.rgb = hsl2rgb(new_hue / 255, 1.0, new_brightness / 255)
       return True
 
     else:
       return False
+

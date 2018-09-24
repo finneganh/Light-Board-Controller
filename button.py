@@ -9,13 +9,18 @@ class Button:
     self.io.pull = digitalio.Pull.UP
     self.light = light
 
+  # Returns 0 if no change, 1 for down, 2 for up
   def read(self):
-    out = False
+    cur_value = self.io.value
 
-    if self.last_value is True and self.io.value is False:
-      out = True
+    if self.last_value is True and cur_value is False:
+      out = 1
+    elif self.last_value is False and cur_value is True:
+      out = 2
+    else:
+      out = 0
 
-    self.last_value = self.io.value
+    self.last_value = cur_value
 
     return out
 

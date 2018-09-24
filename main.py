@@ -26,7 +26,7 @@ STATE_UNINITIALIZED = 2
 STATE_WAITING_CONNECTION = 3
 
 num_buttons = 5
-button_pixels = neopixel.NeoPixel(
+pixels = neopixel.NeoPixel(
     board.D5, num_buttons, pixel_order=neopixel.RGB, brightness=0.2, auto_write=False)
 
 # Default baud rate for the board is 9600. We keep a low-ish timeout so we can determine
@@ -43,9 +43,11 @@ spi.configure(baudrate=1200000, phase=0, polarity=0)
 
 mcp3008 = Mcp3008(spi, cs_pin=board.D2)
 
-light1 = Light(mcp3008, hue_pin=0, brightness_pin=1)
 LIGHTS = [
-    light1,
+    Light(mcp3008, hue_pin=0, brightness_pin=1),
+    Light(mcp3008, hue_pin=2, brightness_pin=3),
+    Light(mcp3008, hue_pin=4, brightness_pin=5),
+    Light(mcp3008, hue_pin=6, brightness_pin=7),
 ]
 
 PRESET_BUTTONS = [
@@ -56,29 +58,40 @@ PRESET_BUTTONS = [
     Button(board.D13, light=4),
 ]
 
-button_states = [
-    0,
-    0,
-    0,
-    0,
-    0,
-]
+PRESET_SELECTED_RGB = (230, 255, 255)
 
-RED = (255, 0, 0)
-YELLOW = (255, 150, 0)
-GREEN = (0, 255, 0)
-CYAN = (0, 255, 255)
-BLUE = (0, 0, 255)
-PURPLE = (180, 0, 255)
+preset_mode_edit = True
+current_preset = 255
 
-COLORS = [
-    RED,
-    YELLOW,
-    GREEN,
-    CYAN,
-    BLUE,
-    PURPLE
-]
+def toggle_preset_mode():
+    global preset_mode_edit
+
+    preset_mode_edit = not preset_mode_edit
+    if preset_mode_edit:
+        pixels[4] = (255, 0, 0)
+    else:
+        pixels[4] = (0, 255, 0)
+    pixels.write()
+
+def update_current_preset(preset):
+    global current_preset
+
+    if current_preset is preset:
+        return
+
+    current_preset = preset
+    
+    for idx in range(3):
+        btn = PRESET_BUTTONS[idx]
+        if idx is preset:
+            pixels[btn.light] = PRESET_SELECTED_RGB
+        else:
+            pixels[btn.light] = (0, 0, 0)
+
+    pixels.write()
+        
+toggle_preset_mode()
+
 
 def buf_to_string(data):
     if data is None:
@@ -118,12 +131,13 @@ def send_at_command(cmd=False):
                 gotResponse = True
 
 
-def send_light_command(cmd, params, extraParams=[]):
+def send_light_command(cmd, params):
     cmd = [COMMAND_PREFIX, cmd]
     cmd.extend(params)
-    cmd.extend(extraParams)
 
-    # Pad out to 20 bytes because that's the BTLE limit
+    # Pad out to 20 bytes because that's the BTLE limit. We fill up to
+    # this amount to (hopefully) cause an immediate write, rather than
+    # worry about something getting to a timeout.
     cmd += [0] * (20 - len(cmd))
 
     btle.write(bytes(cmd))
@@ -158,23 +172,39 @@ def connect_btle():
 
 
 def run_connected():
-    btn_changed = False
+    global preset_mode_edit
+
     for idx in range(num_buttons):
         btn = PRESET_BUTTONS[idx]
-        if btn.read():
-            button_states[idx] = (button_states[idx] + 1) % len(COLORS)
-            btn_changed = True
+        val = btn.read()
 
-        button_pixels[btn.light] = COLORS[button_states[idx]]
+        if 0 <= idx < 3:
+            if val is 1:
+                if preset_mode_edit:
+                    cmd = COMMAND_SET_PRESET
+                    pixels[btn.light] = (255, 0, 0)
+                    pixels.write()
+                else:
+                    cmd = COMMAND_RUN_PRESET
+                    update_current_preset(idx)
 
-    if btn_changed:
-        button_pixels.write()
+                send_light_command(cmd, [idx])
+            elif val is 2:
+                if preset_mode_edit:
+                    pixels[btn.light] = (0, 0, 0)
+                    pixels.write()
+                    
+        if idx is 4 and val is 1:
+            toggle_preset_mode()
 
-    for light in LIGHTS:
+    for idx in range(len(LIGHTS)):
+        light = LIGHTS[idx]
         if light.read():
-            button_pixels.fill(light.rgb)
-            button_pixels.write()
-            send_light_command(COMMAND_SET_LIGHT, [1], light.rgb)
+            pixels[3] = light.rgb
+            pixels.write()
+            send_light_command(COMMAND_SET_LIGHT, [idx, light.hue, light.brightness])
+            update_current_preset(255)
+
 
 def main():
     print("Controller started")
@@ -219,7 +249,6 @@ def main():
             print("Initializing Bluetooth module:")
             initBtle()
             state = STATE_DISCONNECTED
-
 
 
 main()
