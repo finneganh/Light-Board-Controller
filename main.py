@@ -207,6 +207,9 @@ def run_connected():
 
 
 def main():
+    pixels.fill((0, 255, 255))
+    pixels.write()
+
     print("Controller started")
 
     if btle_status_io.value:
