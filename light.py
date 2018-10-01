@@ -53,9 +53,8 @@ class Light:
   def read(self):
     # We shift these down to one byte, but then zero out the LSB to reduce
     # noise from the ADC.
-    new_hue = self.mcp3008.read(self.hue_pin) >> 2 & 0b11111110
-    new_brightness = self.mcp3008.read(self.brightness_pin) >> 2 & 0b11111110
-    new_brightness = 127
+    new_hue = (self.mcp3008.read(self.hue_pin) >> 4 & 0b11111110) * 4
+    new_brightness = (63 - (self.mcp3008.read(self.brightness_pin) >> 4 & 0b11111110)) * 4
 
     if new_hue != self.hue or new_brightness != self.brightness:
       self.hue = new_hue
