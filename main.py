@@ -10,11 +10,11 @@ import neopixel
 from light import Light
 from button import Button
 from mcp3008 import Mcp3008
+from commands import send_light_command, send_at_command, buf_to_string
 
 PROD_MODE = False
 LIGHT_MAC_ADDRESS = '907065277A3D' if PROD_MODE else '9C1D588F0605'
 
-COMMAND_PREFIX = 0xF0
 COMMAND_GET_STATUS = 0x10
 COMMAND_SET_LIGHT = 0x20
 COMMAND_SET_ALL = 0x21
@@ -54,8 +54,8 @@ toggle_io.pull = digitalio.Pull.UP
 LIGHTS = [
     Light(mcp3008, hue_pin=7, brightness_pin=3),
     Light(mcp3008, hue_pin=6, brightness_pin=2),
-    Light(mcp3008, hue_pin=5, brightness_pin=0),
-    Light(mcp3008, hue_pin=4, brightness_pin=1),
+    Light(mcp3008, hue_pin=5, brightness_pin=1),
+    Light(mcp3008, hue_pin=4, brightness_pin=0),
 ]
 
 PRESET_BUTTONS = [
@@ -63,7 +63,7 @@ PRESET_BUTTONS = [
     Button(board.D9, light=2),
     Button(board.D13, light=0),
     Button(board.D10, light=3),
-    Button(board.D12, light=4),
+    Button(board.D12, light=1),
 ]
 
 PRESET_SELECTED_RGB = (255, 0, 255)
@@ -85,93 +85,42 @@ def update_current_preset(preset):
     if current_preset is preset:
         return
 
+    if preset is 255:
+        for idx in range(len(LIGHTS)):
+            light = LIGHTS[idx]
+            light.read()
+            send_light_command(btle, COMMAND_SET_LIGHT, [idx, light.hue, light.brightness])
+
     current_preset = preset
 
 update_preset_mode()
 
-def buf_to_string(data):
-    if data is None:
-        return ''
-    else:
-        return ''.join([chr(b) for b in data])
-
-
-def send_at_command(cmd=False):
-    gotResponse = False
-    lastCommandTime = 0
-
-    while True:
-        if time.time() > lastCommandTime + 2:
-            if cmd:
-                str = 'AT+' + cmd
-            else:
-                str = 'AT'
-
-            print(str)
-            btle.write(str + '\r\n')
-
-            lastCommandTime = time.time()
-
-        data = btle.read(32)
-
-        if data is None or len(data) is 0:
-            if gotResponse:
-                return
-        else:
-            response = buf_to_string(data)
-            print(response, end='')
-
-            if response.startswith('ERR'):
-                lastCommandTime = 0
-            else:
-                gotResponse = True
-
-
-def send_light_command(cmd, params):
-    cmd = [COMMAND_PREFIX, cmd]
-    cmd.extend(params)
-
-    # Pad out to 20 bytes because that's the BTLE limit. We fill up to
-    # this amount to (hopefully) cause an immediate write, rather than
-    # worry about something getting to a timeout.
-    cmd += [0] * (20 - len(cmd))
-
-    btle.write(bytes(cmd))
-
-    lastCommandTime = time.time()
-
-    while True:
-        data = btle.read(20)
-
-        if data is not None:
-            return True
-        elif time.time() > lastCommandTime + 2 or not btle_status_io.value:
-            return False
-
 
 def initBtle():
-    print("Waiting for module ready")
-    send_at_command()
+    # print("Waiting for module ready")
+    send_at_command(btle)
     print()
 
-    print("Getting firmware version")
-    send_at_command('VERSION')
-    print()
+    # print("Getting firmware version")
+    # send_at_command('VERSION')
+    # print()
 
     print("Setting central mode")
-    send_at_command('ROLE1')
+    send_at_command(btle, 'ROLE1')
     print()
 
 
 def connect_btle():
-    send_at_command('CONA' + LIGHT_MAC_ADDRESS)
+    send_at_command(btle, 'CONA' + LIGHT_MAC_ADDRESS)
 
 
 pressed_btn = 255
+cur_movie_light = 0
+last_movie_time = 0
+movie_delay = 1
 
 def run_connected():
-    global preset_mode_edit
-    global pressed_btn 
+    global preset_mode_edit, pressed_btn, cur_movie_light, last_movie_time, movie_delay
 
     for idx in range(num_buttons):
         btn = PRESET_BUTTONS[idx]
@@ -196,16 +145,41 @@ def run_connected():
                     pixels.write()
                     update_current_preset(idx)
 
-                send_light_command(cmd, [idx])
+                send_light_command(btle, cmd, [idx])
+        if idx == 4 and val is 1 and not preset_mode_edit:
+            update_current_preset(4)
+            send_light_command(btle, COMMAND_RUN_PRESET, [4])
+        if idx == 3 and val is 1 and not preset_mode_edit:
+            if current_preset == 3:
+                movie_delay = movie_delay * 2.0
+                if movie_delay > 8:
+                    update_current_preset(255)
+            else:
+                update_current_preset(3)
+                movie_delay = 1
+                last_movie_time = 0
+                cur_movie_light = -1
+
 
     if toggle_io.value == preset_mode_edit:
         update_preset_mode()
 
+    if current_preset == 3 and not preset_mode_edit:
+        cur_time = time.monotonic()
+        if cur_time > last_movie_time + movie_delay:
+            last_movie_time = cur_time
+            cur_movie_light = (cur_movie_light + 1) % len(LIGHTS)
+            light = LIGHTS[cur_movie_light]
+            send_light_command(btle, COMMAND_SET_LIGHT, [255, light.hue, light.brightness])
+
     for idx in range(len(LIGHTS)):
         light = LIGHTS[idx]
         if light.read():
-            send_light_command(COMMAND_SET_LIGHT, [idx, light.hue, light.brightness])
-            update_current_preset(255)
+            if current_preset != 3:
+                send_light_command(btle, COMMAND_SET_LIGHT, [idx, light.hue, light.brightness])
+                update_current_preset(255)
+            elif idx == cur_movie_light:
+                send_light_command(btle, COMMAND_SET_LIGHT, [255, light.hue, light.brightness])
 
     if preset_mode_edit:
         pixels.fill((0, 255, 0))
